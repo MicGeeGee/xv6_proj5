@@ -24,7 +24,10 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 static void itrunc(struct inode*);
 
-static void idel_test(struct inode* ip);
+
+static int icheck_test(int inum,int pres,int *p_num);
+static void bfree_test(int dev, uint b);
+
 static struct 
 {
 	int buf[NDINODES];
@@ -81,8 +84,6 @@ readsb(int dev, struct superblock *sb)
   
   bp = bread(dev, 1);
   memmove(sb, bp->data, sizeof(*sb));
-
-  cprintf("nblock=%d\n,ninodes=%d\n,size=%d\n,",sb->nblocks,sb->ninodes,sb->size);
 
   brelse(bp);
 }
@@ -146,6 +147,23 @@ bfree(int dev, uint b)
   log_write(bp);
   brelse(bp);
 }
+
+static void bfree_test(int dev, uint b)
+{
+	struct buf *bp;
+	struct superblock sb;
+	int bi, m;
+
+	readsb(dev, &sb);
+	bp = bread(dev, BBLOCK(b, sb.ninodes));
+	bi = b % BPB;
+	m = 1 << (bi % 8);
+	if((bp->data[bi/8] & m) == 0)
+		panic("freeing free block");
+	bp->data[bi/8] &= ~m;
+	brelse(bp);
+}
+
 
 // Inodes.
 //
@@ -223,11 +241,62 @@ iinit(void)
 static struct inode* iget(uint dev, uint inum);
 
 
-static void idel_test(struct inode* ip)
+static int icheck_test(int inum,int pres,int *p_num)
 {
-	ip->ref=1;
-	ip->flags|=I_VALID;
-	ip->nlink=0;
+	struct buf *bp;
+	struct buf *bp_t;
+	struct dinode *dip;
+	int i,j;
+	uint *a;
+	int res=0; // whether there is inode needed to be free.
+	
+
+	bp = bread(ROOTDEV, IBLOCK(inum));
+    dip = (struct dinode*)bp->data + inum%IPB;
+	if(dip->type && !pres)
+	{
+		res=1;
+
+		cprintf("fsck: inode %d is allocated but is not referenced by any dir! ",inum);
+		cprintf("Fixing ...");
+		dip->type=0;
+		
+
+		// free content(including resetting bitmap)
+		for(i = 0; i < NDIRECT; i++)
+		{
+			if(dip->addrs[i])
+			{
+			  bfree_test(ROOTDEV, dip->addrs[i]);
+			  (*p_num)++;
+			  dip->addrs[i] = 0;
+			}
+		}
+  
+		if(dip->addrs[NDIRECT])
+		{
+			bp_t = bread(ROOTDEV, dip->addrs[NDIRECT]);
+			a = (uint*)bp_t->data;
+			for(j = 0; j < NINDIRECT; j++)
+			{
+				if(a[j])
+				{
+					bfree_test(ROOTDEV, a[j]);
+					(*p_num)++;
+				}
+			}
+			brelse(bp_t);
+			bfree_test(ROOTDEV, dip->addrs[NDIRECT]);
+			(*p_num)++;
+			dip->addrs[NDIRECT] = 0;
+		}
+
+	}
+	bwrite(bp);
+	brelse(bp);
+
+	
+	return res;
 }
 
 void
@@ -240,11 +309,16 @@ itest(void)
   uint off;
   struct dirent de;
   int pres[NDINODES];
-  
+  int fixed_i_num=0;
+  int fixed_b_num=0;
+
+  cprintf("--------------------------\n");
+  cprintf("Running fsck ...\n");
+
   memset(pres,0,NDINODES*sizeof(int));
   
   readsb(ROOTDEV,&sb);
-  cprintf("nblock=%d\nninodes=%d\nsize=%d\n,",sb.nblocks,sb.ninodes,sb.size);
+  //cprintf("nblock=%d\nninodes=%d\nsize=%d\n,",sb.nblocks,sb.ninodes,sb.size);
   
   tq_init();
   tq_push_back(ROOTINO);
@@ -267,9 +341,9 @@ itest(void)
 			{
 				tq_push_back(de.inum);
 				pres[de.inum]=1;
-				//cprintf("push\n");
+				
 			}
-			cprintf("Dir name:%s\n",de.name);
+			//cprintf("Dir name:%s\n",de.name);
 		}
 	else
 	{
@@ -278,37 +352,27 @@ itest(void)
 	iunlockput(ip);
   }
 
-  for(i=1;i<200;i++)
+  
+  /*for(i=1;i<200;i++)
 	  if(pres[i]==1)
 		cprintf("pres[%d]=%d\n",i,pres[i]);
+  */
 
   for(i=1;i<sb.ninodes;i++)
   {
-	ip=iget(ROOTDEV,i);
-	begin_op();
-	ilock_test(ip);
-
-	if(ip->type==0)
+	if((icheck_test(i,pres[i],&fixed_b_num))>0)
 	{
-		ip->ref=0;// Free the inode.
-		ip->flags=I_BUSY;
-		iunlock_test(ip);
-		iput(ip);
-		end_op();
-		continue;
+		fixed_i_num++;
+		cprintf("Done.\n");
 	}
-	else if(!pres[i])
-	{
-		cprintf("rm inode #%d\n",i);
-		idel_test(ip);
-	}
-	if(ip->type)
-		cprintf("#%d: ip->type=%d,ip->nlink=%d\n",i,ip->type,ip->nlink);
-	iunlock(ip);
-	iput(ip);
-	end_op();
   }
-  
+  if(fixed_i_num)
+	cprintf("fsck completed. Fixed %d inodes and freed %d disk blocks.\n",fixed_i_num,fixed_b_num);
+  else
+	cprintf("fsck: no problem found.\n");
+
+  cprintf("--------------------------\n");
+
 }
 
 
