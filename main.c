@@ -33,10 +33,14 @@ main(void)
   fileinit();      // file table
   iinit();         // inode cache
   ideinit();       // disk
+
+  //itest();
+
   if(!ismp)
     timerinit();   // uniprocessor timer
   startothers();   // start other processors
   kinit2(P2V(4*1024*1024), P2V(PHYSTOP)); // must come after startothers()
+  
   userinit();      // first user process
   // Finish setting up this processor in mpmain.
   mpmain();

@@ -176,6 +176,9 @@
     <None Include="usys.S">
       <Filter>源文件</Filter>
     </None>
+    <None Include="kernel.ld">
+      <Filter>源文件</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="asm.h">

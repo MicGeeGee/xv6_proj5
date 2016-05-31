@@ -41,8 +41,10 @@ struct inode*   ialloc(uint, short);
 struct inode*   idup(struct inode*);
 void            iinit(void);
 void            ilock(struct inode*);
+void            ilock_test(struct inode*);
 void            iput(struct inode*);
 void            iunlock(struct inode*);
+void            iunlock_test(struct inode*);
 void            iunlockput(struct inode*);
 void            iupdate(struct inode*);
 int             namecmp(const char*, const char*);
@@ -52,10 +54,13 @@ int             readi(struct inode*, char*, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, char*, uint, uint);
 
+void			itest(void);
+
 // ide.c
 void            ideinit(void);
 void            ideintr(void);
 void            iderw(struct buf*);
+
 
 // ioapic.c
 void            ioapicenable(int irq, int cpu);

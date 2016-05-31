@@ -86,7 +86,7 @@ bget(uint dev, uint sector)
     if((b->flags & B_BUSY) == 0 && (b->flags & B_DIRTY) == 0){
       b->dev = dev;
       b->sector = sector;
-      b->flags = B_BUSY;
+      b->flags = B_BUSY;//It will also clear B_VALID and B_DIRTY bits.
       release(&bcache.lock);
       return b;
     }

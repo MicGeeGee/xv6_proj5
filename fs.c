@@ -19,9 +19,59 @@
 #include "buf.h"
 #include "fs.h"
 #include "file.h"
+#include "x86.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 static void itrunc(struct inode*);
+
+static void idel_test(struct inode* ip);
+static struct 
+{
+	int buf[NDINODES];
+	int f;
+	int r;
+	int size;
+}tque;
+static void tq_init();
+static void tq_pop();
+static void tq_push_back(int inum);
+static int tq_front();
+static int tq_size();
+
+
+
+static void 
+tq_init()
+{
+	tque.f=tque.r=0;
+	tque.size=0;
+}
+static void 
+tq_pop()
+{
+	tque.f++;
+	tque.f%=200;
+	tque.size--;
+}
+static void 
+tq_push_back(int inum)
+{
+	tque.buf[tque.r]=inum;
+	tque.r++;
+	tque.r%=200;
+	tque.size++;
+}
+static int 
+tq_front()
+{
+	return tque.buf[tque.f];
+}
+static int 
+tq_size()
+{
+	return tque.size;
+}
+
 
 // Read the super block.
 void
@@ -31,6 +81,9 @@ readsb(int dev, struct superblock *sb)
   
   bp = bread(dev, 1);
   memmove(sb, bp->data, sizeof(*sb));
+
+  cprintf("nblock=%d\n,ninodes=%d\n,size=%d\n,",sb->nblocks,sb->ninodes,sb->size);
+
   brelse(bp);
 }
 
@@ -169,6 +222,96 @@ iinit(void)
 
 static struct inode* iget(uint dev, uint inum);
 
+
+static void idel_test(struct inode* ip)
+{
+	ip->ref=1;
+	ip->flags|=I_VALID;
+	ip->nlink=0;
+}
+
+void
+itest(void)
+{
+  struct superblock sb;
+  int i;
+  struct inode* ip;
+  int f_inum;
+  uint off;
+  struct dirent de;
+  int pres[NDINODES];
+  
+  memset(pres,0,NDINODES*sizeof(int));
+  
+  readsb(ROOTDEV,&sb);
+  cprintf("nblock=%d\nninodes=%d\nsize=%d\n,",sb.nblocks,sb.ninodes,sb.size);
+  
+  tq_init();
+  tq_push_back(ROOTINO);
+  pres[ROOTINO]=1;
+
+  while(tq_size()!=0)
+  {
+	f_inum=tq_front();
+	tq_pop();
+	ip=iget(ROOTDEV,f_inum);
+	ilock(ip);
+	if(ip->type == T_DIR)
+		for(off = 0; off < ip->size; off += sizeof(de))
+		{
+			if(readi(ip, (char*)&de, off, sizeof(de)) != sizeof(de))
+				panic("dirlink read");
+			if(de.inum == 0)
+				continue;
+			if(!(namecmp(".", de.name) == 0||namecmp("..", de.name) == 0))
+			{
+				tq_push_back(de.inum);
+				pres[de.inum]=1;
+				//cprintf("push\n");
+			}
+			cprintf("Dir name:%s\n",de.name);
+		}
+	else
+	{
+		//cprintf("not dir.\n");
+	}
+	iunlockput(ip);
+  }
+
+  for(i=1;i<200;i++)
+	  if(pres[i]==1)
+		cprintf("pres[%d]=%d\n",i,pres[i]);
+
+  for(i=1;i<sb.ninodes;i++)
+  {
+	ip=iget(ROOTDEV,i);
+	begin_op();
+	ilock_test(ip);
+
+	if(ip->type==0)
+	{
+		ip->ref=0;// Free the inode.
+		ip->flags=I_BUSY;
+		iunlock_test(ip);
+		iput(ip);
+		end_op();
+		continue;
+	}
+	else if(!pres[i])
+	{
+		cprintf("rm inode #%d\n",i);
+		idel_test(ip);
+	}
+	if(ip->type)
+		cprintf("#%d: ip->type=%d,ip->nlink=%d\n",i,ip->type,ip->nlink);
+	iunlock(ip);
+	iput(ip);
+	end_op();
+  }
+  
+}
+
+
 //PAGEBREAK!
 // Allocate a new inode with the given type on device dev.
 // A free inode has a type of zero.
@@ -184,7 +327,7 @@ ialloc(uint dev, short type)
 
   for(inum = 1; inum < sb.ninodes; inum++){
     bp = bread(dev, IBLOCK(inum));
-    dip = (struct dinode*)bp->data + inum%IPB;
+    dip = (struct dinode*)bp->data + inum%IPB;//A block contains many inodes.
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
       dip->type = type;
@@ -204,6 +347,7 @@ iupdate(struct inode *ip)
   struct buf *bp;
   struct dinode *dip;
 
+  
   bp = bread(ip->dev, IBLOCK(ip->inum));
   dip = (struct dinode*)bp->data + ip->inum%IPB;
   dip->type = ip->type;
@@ -252,6 +396,7 @@ iget(uint dev, uint inum)
   return ip;
 }
 
+
 // Increment reference count for ip.
 // Returns ip to enable ip = idup(ip1) idiom.
 struct inode*
@@ -292,9 +437,47 @@ ilock(struct inode *ip)
     brelse(bp);
     ip->flags |= I_VALID;
     if(ip->type == 0)
-      panic("ilock: no type");
+		panic("ilock: no type");
+	}
+}
+
+
+void
+ilock_test(struct inode *ip)
+{
+  struct buf *bp;
+  struct dinode *dip;
+
+  if(ip == 0 || ip->ref < 1)
+    panic("ilock");
+
+  acquire(&icache.lock);
+  while(ip->flags & I_BUSY)
+    sleep(ip, &icache.lock);
+  ip->flags |= I_BUSY;
+  release(&icache.lock);
+
+  if(!(ip->flags & I_VALID)){
+    bp = bread(ip->dev, IBLOCK(ip->inum));
+    dip = (struct dinode*)bp->data + ip->inum%IPB;
+    ip->type = dip->type;
+    ip->major = dip->major;
+    ip->minor = dip->minor;
+    ip->nlink = dip->nlink;
+    ip->size = dip->size;
+    memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
+    brelse(bp);
+    ip->flags |= I_VALID;
+    if(ip->type == 0)
+	{
+		//cprintf("NO TYPE:inum=%d.\n",ip->inum);
+		
+		//panic("ilock: no type");
+	}
   }
 }
+
+
 
 // Unlock the given inode.
 void
@@ -308,6 +491,19 @@ iunlock(struct inode *ip)
   wakeup(ip);
   release(&icache.lock);
 }
+
+void
+iunlock_test(struct inode *ip)
+{
+  if(ip == 0 || !(ip->flags & I_BUSY))
+    panic("iunlock");
+
+  acquire(&icache.lock);
+  ip->flags &= ~I_BUSY;
+  wakeup(ip);
+  release(&icache.lock);
+}
+
 
 // Drop a reference to an in-memory inode.
 // If that was the last reference, the inode cache entry can
@@ -330,7 +526,7 @@ iput(struct inode *ip)
     ip->type = 0;
     iupdate(ip);
     acquire(&icache.lock);
-    ip->flags = 0;
+    ip->flags = 0;// Clear I_BUSY and I_VALID.
     wakeup(ip);
   }
   ip->ref--;

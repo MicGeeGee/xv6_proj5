@@ -10,6 +10,9 @@
 
 #define ROOTINO 1  // root i-number
 #define BSIZE 512  // block size
+#define NDINODES 200 // number of dinodes.
+
+
 
 // File system super block
 struct superblock {

@@ -163,6 +163,7 @@ end_op(void)
     // call commit w/o holding locks, since not allowed
     // to sleep with locks.
     commit();
+	
     acquire(&log.lock);
     log.committing = 0;
     wakeup(&log);
@@ -190,7 +191,7 @@ static void
 commit()
 {
   if (log.lh.n > 0) {
-    write_log();     // Write modified blocks from cache to log
+	write_log();     // Write modified blocks from cache to log
     write_head();    // Write header to disk -- the real commit
     install_trans(); // Now install writes to home locations
     log.lh.n = 0; 
@@ -222,7 +223,7 @@ log_write(struct buf *b)
       break;
   }
   log.lh.sector[i] = b->sector;
-  if (i == log.lh.n)
+  if (i == log.lh.n) // fail finding
     log.lh.n++;
   b->flags |= B_DIRTY; // prevent eviction
 }
