@@ -318,7 +318,6 @@ itest(void)
   memset(pres,0,NDINODES*sizeof(int));
   
   readsb(ROOTDEV,&sb);
-  //cprintf("nblock=%d\nninodes=%d\nsize=%d\n,",sb.nblocks,sb.ninodes,sb.size);
   
   tq_init();
   tq_push_back(ROOTINO);
@@ -343,20 +342,9 @@ itest(void)
 				pres[de.inum]=1;
 				
 			}
-			//cprintf("Dir name:%s\n",de.name);
 		}
-	else
-	{
-		//cprintf("not dir.\n");
-	}
 	iunlockput(ip);
   }
-
-  
-  /*for(i=1;i<200;i++)
-	  if(pres[i]==1)
-		cprintf("pres[%d]=%d\n",i,pres[i]);
-  */
 
   for(i=1;i<sb.ninodes;i++)
   {
@@ -506,41 +494,6 @@ ilock(struct inode *ip)
 }
 
 
-void
-ilock_test(struct inode *ip)
-{
-  struct buf *bp;
-  struct dinode *dip;
-
-  if(ip == 0 || ip->ref < 1)
-    panic("ilock");
-
-  acquire(&icache.lock);
-  while(ip->flags & I_BUSY)
-    sleep(ip, &icache.lock);
-  ip->flags |= I_BUSY;
-  release(&icache.lock);
-
-  if(!(ip->flags & I_VALID)){
-    bp = bread(ip->dev, IBLOCK(ip->inum));
-    dip = (struct dinode*)bp->data + ip->inum%IPB;
-    ip->type = dip->type;
-    ip->major = dip->major;
-    ip->minor = dip->minor;
-    ip->nlink = dip->nlink;
-    ip->size = dip->size;
-    memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
-    brelse(bp);
-    ip->flags |= I_VALID;
-    if(ip->type == 0)
-	{
-		//cprintf("NO TYPE:inum=%d.\n",ip->inum);
-		
-		//panic("ilock: no type");
-	}
-  }
-}
-
 
 
 // Unlock the given inode.
@@ -556,17 +509,6 @@ iunlock(struct inode *ip)
   release(&icache.lock);
 }
 
-void
-iunlock_test(struct inode *ip)
-{
-  if(ip == 0 || !(ip->flags & I_BUSY))
-    panic("iunlock");
-
-  acquire(&icache.lock);
-  ip->flags &= ~I_BUSY;
-  wakeup(ip);
-  release(&icache.lock);
-}
 
 
 // Drop a reference to an in-memory inode.
